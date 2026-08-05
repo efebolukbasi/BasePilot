@@ -10,6 +10,13 @@ reading, no packet manipulation, no modified client.
 
 This repository hosts **downloadable releases only** — see [Releases](../../releases).
 
+![BasePilot running beside Clash of Clans: the Run page shows Maxer mode with "Run until
+maxed" enabled, and the Live Status panel reports IDLING with 0/6 builders free and both
+storages full](docs/basepilot-screenshot.png)
+
+*BasePilot idling on purpose: storages are capped and every builder is busy, so it holds
+position and rechecks instead of raiding for loot that would overflow.*
+
 ---
 
 ## What it does
