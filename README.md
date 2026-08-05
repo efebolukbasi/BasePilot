@@ -33,8 +33,15 @@ It only stops when you tell it to.
 **Wall upgrades.** Batch-buys walls when loot passes a threshold you set, elixir first,
 keeping enough gold for match entry fees.
 
-**Live status.** Current state, free builders, laboratory, storage levels, and session
-loot with an hourly rate.
+**Loot tracking.** Every raid's gold, elixir, and dark elixir gains are read straight
+off the HUD and accumulated into a session total plus a **loot-per-hour rate**, so you
+can see what an army or strategy is actually earning you instead of guessing. Readings
+require agreement across consecutive frames and are sanity-checked against what a
+single raid can plausibly yield, so a bad OCR frame can't inflate your numbers. (Note
+that a capped storage banks nothing — the rate reflects real gains, not raid count.)
+
+**Live status.** Current state, free builders, laboratory, and storage levels at a
+glance, alongside the loot readout.
 
 Works at **any Town Hall level** — detection reads the game's own UI signals (builder
 chip, lab chip, storage indicators) rather than hardcoded per-TH values.
