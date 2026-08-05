@@ -1,0 +1,4 @@
+# Release-only repository: binaries are attached to GitHub Releases, never committed.
+*.exe
+*.zip
+*.7z
