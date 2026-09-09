@@ -225,6 +225,14 @@ class RunPage(QWidget):
         card.card_layout.addWidget(self._ranked)
         self._upgrade_walls = ToggleSwitch('Upgrade walls', parent = card)
         card.card_layout.addWidget(self._upgrade_walls)
+        self._auto_donate = ToggleSwitch('Auto donate', parent = card)
+        card.card_layout.addWidget(self._auto_donate)
+        self._auto_request = ToggleSwitch('Auto request troops', parent = card)
+        card.card_layout.addWidget(self._auto_request)
+        clan_hint = QLabel('Between raids the bot opens the clan chat, donates to open requests, and asks for reinforcements. Pick the chat button once in Settings → Clan assist — dry run is on there by default, so the first run only logs what it would click.')
+        clan_hint.setWordWrap(True)
+        clan_hint.setStyleSheet(f'''color: {TOKENS['text_muted']};''')
+        card.card_layout.addWidget(clan_hint)
         mr_row = QHBoxLayout()
         self._multi_run = ToggleSwitch('Multi-run', parent = card)
         mr_row.addWidget(self._multi_run)
@@ -300,6 +308,7 @@ class RunPage(QWidget):
         self._stat_storages = stat(0, 3, 'Storages')
         self._stat_loot = stat(1, 0, 'Loot this session')
         self._stat_loot_rate = stat(1, 1, 'Loot / hour')
+        self._stat_skipped = stat(1, 2, 'Bases skipped')
         self._stat_note = QLabel('Start the bot to see live village state here. Builders / lab / storages update while Auto upgrade is on.')
         self._stat_note.setWordWrap(True)
         self._stat_note.setStyleSheet(f'''color: {TOKENS['text_muted']};''')
@@ -336,6 +345,9 @@ class RunPage(QWidget):
         storages = payload.get('storages')
         if storages:
             self._stat_storages.setText(str(storages))
+        skipped = payload.get('skipped')
+        if skipped is not None:
+            self._stat_skipped.setText(str(skipped))
         note = payload.get('note')
         if note:
             self._stat_note.setText(f'''Upgrades: {note}''')
@@ -464,6 +476,8 @@ class RunPage(QWidget):
         '''Bring back the last run's choices (mode, walls, duration) across app starts.'''
         self._set_auto_upgrade_mode(str(self._settings.value('run/autoUpgrade', 'off')))
         self._upgrade_walls.setChecked(self._settings.value('run/upgradeWalls', False, type = bool))
+        self._auto_donate.setChecked(self._settings.value('run/autoDonate', False, type = bool))
+        self._auto_request.setChecked(self._settings.value('run/autoRequest', False, type = bool))
         self._until_maxed.setChecked(self._settings.value('run/untilMaxed', False, type = bool))
         minutes = self._settings.value('run/minutes', 15, type = int)
         if 1 <= minutes <= 999:
@@ -472,6 +486,8 @@ class RunPage(QWidget):
     def _save_choices(self):
         self._settings.setValue('run/autoUpgrade', self._get_auto_upgrade_mode())
         self._settings.setValue('run/upgradeWalls', self._upgrade_walls.isChecked())
+        self._settings.setValue('run/autoDonate', self._auto_donate.isChecked())
+        self._settings.setValue('run/autoRequest', self._auto_request.isChecked())
         self._settings.setValue('run/untilMaxed', self._until_maxed.isChecked())
         self._settings.setValue('run/minutes', self._minutes_spin.value())
 
@@ -521,7 +537,9 @@ class RunPage(QWidget):
         if builder_base and self._get_bb_prioritise() == 'elixir' and not self._confirm_bb_elixir_prioritise():  # [recovered: decompiler inverted both conditions]
             return None
         self._save_choices()
-        self._controller.start(method = method, minutes = mins, star_bonus = star_bonus, ranked_fill = ranked_fill, upgrade_walls = False if builder_base else self._upgrade_walls.isChecked(), multi_run_players = multi_arg, builder_base = builder_base, loot_prioritise = self._get_bb_prioritise() if builder_base else 'both', auto_upgrade = 'off' if builder_base else self._get_auto_upgrade_mode())
+        # Clan assist rides the Home Village flow (the chat button is calibrated on it,
+        # and the Builder Base has no clan chat).
+        self._controller.start(method = method, minutes = mins, star_bonus = star_bonus, ranked_fill = ranked_fill, upgrade_walls = False if builder_base else self._upgrade_walls.isChecked(), multi_run_players = multi_arg, builder_base = builder_base, loot_prioritise = self._get_bb_prioritise() if builder_base else 'both', auto_upgrade = 'off' if builder_base else self._get_auto_upgrade_mode(), auto_donate = False if builder_base else self._auto_donate.isChecked(), auto_request = False if builder_base else self._auto_request.isChecked())
 
     
     def is_star_bonus_enabled(self):
@@ -534,9 +552,10 @@ class RunPage(QWidget):
             return None
 
 
-    def apply_autostart(self, minutes, upgrade_walls, auto_upgrade = 'off'):
+    def apply_autostart(self, minutes, upgrade_walls, auto_upgrade = 'off', auto_donate = False, auto_request = False):
         '''CLI ``--autostart``: Home Village run with the given duration (``0`` =
-        run until maxed), wall toggle, and auto-upgrade mode (off|dry|maxer|rusher).'''
+        run until maxed), wall toggle, auto-upgrade mode (off|dry|maxer|rusher), and
+        the clan-assist toggles.'''
         if self._controller.is_running():
             return None
         self._star_bonus.setChecked(False)
@@ -544,6 +563,8 @@ class RunPage(QWidget):
         if minutes > 0:
             self._minutes_spin.setValue(minutes)
         self._upgrade_walls.setChecked(bool(upgrade_walls))
+        self._auto_donate.setChecked(bool(auto_donate))
+        self._auto_request.setChecked(bool(auto_request))
         self._set_auto_upgrade_mode(auto_upgrade)
         self.start_bot()
 

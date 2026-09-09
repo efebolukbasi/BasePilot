@@ -20,6 +20,15 @@ from app.services.vision import VisionService
 from app.utils.logger import setup_logger
 
 logger = setup_logger('VillageState')
+# No village holds this much. A bigger number is the HUD reader gaining a digit: live,
+# elixir read as 49,796,363 against a real 9,796,363 in the second after a purchase, and
+# as 411,251,572 and 116,737,862 in the run log. The corruption is systematic while the
+# resource bar animates, so two consecutive reads can agree on it and pass the stability
+# check above. Set above the largest storage set in the game today (a maxed Town Hall 17
+# holds a little under 25M of either) and well below a spurious extra digit. Rejecting a
+# real read by mistake costs one cycle: callers treat it as an unreadable HUD, which
+# falls back to the storage icons rather than doing anything rash.
+_IMPLAUSIBLE_HUD_MAIN = 30000000
 
 
 @dataclass(frozen = True)
@@ -90,6 +99,11 @@ def read_hud_triplet_stable(capture, wait, attempts = 4):
             prev = None
             continue
         if triplet == prev:
+            (gold, elixir, _dark) = triplet
+            if gold > _IMPLAUSIBLE_HUD_MAIN or elixir > _IMPLAUSIBLE_HUD_MAIN:
+                logger.warning('HUD read gold=%s elixir=%s is impossibly large — treating it as unreadable', gold, elixir)
+                prev = None
+                continue
             return triplet
         prev = triplet
     return None

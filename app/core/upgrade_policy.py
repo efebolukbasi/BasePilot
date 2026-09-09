@@ -16,6 +16,7 @@ from app.core.upgrade_menu import (
     RESOURCE_DARK,
     RESOURCE_ELIXIR,
     RESOURCE_GOLD,
+    SECTION_IN_PROGRESS,
     SECTION_OTHER,
     SECTION_SUGGESTED,
     UpgradeRow,
@@ -74,9 +75,17 @@ def choose_upgrade(rows, resources, free_builders, policy):
     '''
     if free_builders is None or free_builders <= policy.reserve_builders:
         return None
+    # An unread section header must not disqualify a row. The popup only draws
+    # 'Suggested upgrades:' / 'Other upgrades:' once, so every view scrolled past them
+    # has no header to read, and a missed header read blanks the section for the whole
+    # descent — live repro: 51 rows scanned, every one section '', "nothing to start"
+    # with two builders free and a 5,000-gold Bomb sitting there affordable. What
+    # actually disqualifies a row is being IN PROGRESS, and those never carry a parsed
+    # cost (they show remaining time), so the cost/affordability gates below already
+    # exclude them; the section check is kept only to reject them explicitly.
     candidates = [
         r for r in rows
-        if r.section in (SECTION_SUGGESTED, SECTION_OTHER)
+        if r.section != SECTION_IN_PROGRESS
         and r.affordable
         and not is_wall_row(r)  # walls belong to the wall-batch flow (overflow sink)
         and can_pay(r, resources, policy)

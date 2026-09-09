@@ -10,6 +10,13 @@ def setup_logger(name = 'BasePilot', log_file = None, level = logging.INFO):
     if logger.hasHandlers():
         return logger
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt = '%Y-%m-%d %H:%M:%S')
+    # A Windows console is cp1252 by default, and log lines carry — and → : without
+    # this, every such line prints a "--- Logging error ---" traceback instead of the
+    # message. The file handler is already utf-8; this makes the console match.
+    try:
+        sys.stdout.reconfigure(encoding = 'utf-8', errors = 'replace')
+    except (AttributeError, ValueError, OSError):
+        pass  # a frozen build may have no real stdout to reconfigure
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)

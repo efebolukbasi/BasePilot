@@ -30,10 +30,15 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('BasePilot')
+        # The profile is in the title because two BasePilot windows on one desktop are
+        # otherwise indistinguishable, and each one is driving a different account.
+        from app.utils.common import get_profile_name
+        profile = get_profile_name()
+        self.setWindowTitle(f'''BasePilot — {profile}''' if profile else 'BasePilot')
         self.resize(*WINDOW_DEFAULT)
         self.setMinimumSize(*WINDOW_MIN)
-        self._settings = QSettings('BasePilot', 'UI')
+        # Window geometry, the last open tab and other UI state are per profile too.
+        self._settings = QSettings('BasePilot', f'''UI-{profile}''' if profile else 'UI')
         self._migrate_legacy_ui_settings()
         self._controller = BotController(bot_version = __version__)
         self._taskbar = None
@@ -111,9 +116,9 @@ class MainWindow(QMainWindow):
             return None
 
 
-    def autostart_run(self, minutes, upgrade_walls, auto_upgrade = 'off'):
+    def autostart_run(self, minutes, upgrade_walls, auto_upgrade = 'off', auto_donate = False, auto_request = False):
         '''CLI ``--autostart``: configure the Run page and press Start.'''
-        self._run_page.apply_autostart(minutes, upgrade_walls, auto_upgrade)
+        self._run_page.apply_autostart(minutes, upgrade_walls, auto_upgrade, auto_donate, auto_request)
 
 
     def _restore_geometry(self):

@@ -45,6 +45,24 @@ It only stops when you tell it to.
 **Wall upgrades.** Batch-buys walls when loot passes a threshold you set, elixir first,
 keeping enough gold for match entry fees.
 
+**Loot filter.** Reads the loot a matched base is holding and presses **Next** until one
+clears your minimums (500k gold and 500k elixir by default), so an army is never spent on
+a 40k base. Bounded by a skip cap, because every Next costs another search fee. Set it in
+*Settings -> Minimum loot to attack*; the Run page counts the bases it skipped.
+
+**Clan assist (beta).** Between raids it opens the clan menu and serves every open
+request — longest-waiting first, following the game's own "!" badge for the ones the
+screen isn't showing, and giving each troop until the game greys it out — then asks for
+reinforcements of its own. It only leaves once no Donate button and no badge remain, and
+it holds off donating while your elixir is under a floor you set. It keeps doing that
+through the long idle stretches of *Run until maxed*, when requests pile up unanswered.
+Every click is the game's own button, matched on screen rather than remembered as a
+coordinate, and the close button doubles as proof the menu opened and closed. The button and troop templates it
+matches ship with BasePilot for 16:9 clients; on 16:10, or to add a troop, *Settings →
+Clan assist → **Capture templates*** crops them from your own client at the right scale.
+Leave it in **dry run** for a session first to see what it recognises. Full setup and
+mechanics: [docs/clan.md](docs/clan.md).
+
 **Loot tracking.** Every raid's gold, elixir, and dark elixir gains are read straight
 off the HUD and accumulated into a session total plus a **loot-per-hour rate**, so you
 can see what an army or strategy is actually earning you instead of guessing. Readings
@@ -73,6 +91,10 @@ Automation that spends resources has to be careful, so BasePilot:
 - Keeps a gold buffer so matchmaking entry fees are never spent away.
 - Screenshots anything it couldn't verify to `%LOCALAPPDATA%\BasePilot\debug\` and
   benches that upgrade instead of retrying blindly.
+- Refuses to confirm a donation or request through a button that shows a price (red cost
+  or a gem icon beside it) — both are free, so a price tag means it found the wrong one.
+- Gives up rather than flails: five clan-menu passes it couldn't make sense of disable
+  clan assist for the session instead of clicking a bad template all night.
 
 ## Requirements
 
@@ -100,10 +122,16 @@ reopen Clash, then *Restore my display* — the running game keeps 16:9.
 Command line, for scheduled or overnight runs:
 
 ```
-BasePilot.exe --autostart --minutes 0 --walls --upgrades maxer
+BasePilot.exe --autostart --minutes 0 --walls --upgrades maxer --donate --request
 ```
 
-`--minutes 0` means run until maxed. `--upgrades off|dry|maxer|rusher`.
+`--minutes 0` means run until maxed. `--upgrades off|dry|maxer|rusher`. `--donate`
+and `--request` arm clan assist (capture its templates first — see
+[docs/clan.md](docs/clan.md)).
+
+Farming more than one account — the Players page runs them one after another, and
+`--profile NAME` gives a second BasePilot window its own settings, window pin and log:
+[docs/two-accounts.md](docs/two-accounts.md).
 
 ## Army setup
 

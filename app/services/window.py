@@ -15,6 +15,7 @@ MK_LBUTTON = 1
 WM_MOUSEWHEEL = 522
 WHEEL_DELTA = 120
 _CHILD_CLASS_PREFIX = 'CROSVM'
+_MINIMIZED_COORD = -30000  # Windows parks minimized windows at (-32000, -32000)
 
 @dataclass
 class WindowCandidate:
@@ -68,6 +69,7 @@ class DescendantInfo:
 class WindowService:
     '''Handles window finding and screenshot capture using Windows API.'''
     _TOP_LEVEL_CLASS_PREFIX = 'HwndWrapper'
+    _minimized_logged: bool = False  # the "window is minimized" warning is logged once per run
     
     def __init__(self, window_name = 'Clash of Clans', child_class = 'CROSVM_1'):
         self.window_name = window_name
@@ -241,6 +243,7 @@ fails. Candidates with a CROSVM surface are sorted first.
         if not selection.is_set():
             return self._auto_detect_child()
         wanted_title = selection.title.strip().lower()
+        matches = []
         for cand in self.enumerate_windows():
             if wanted_title and cand.title.strip().lower() != wanted_title:
                 continue
@@ -249,9 +252,17 @@ fails. Candidates with a CROSVM surface are sorted first.
             (surface_hwnd, _) = self._resolve_surface(cand.top_hwnd, cand.top_class, selection.child_class)
             if not surface_hwnd:
                 continue
-            self.enumerate_windows()
-            return surface_hwnd
-        return 0
+            matches.append(surface_hwnd)
+        if not matches:
+            return 0
+        if len(matches) > 1:
+            # Two emulator windows with the same title cannot be told apart by a pin that
+            # only records title and class, and two BasePilot profiles would then both
+            # drive the first one. Say so rather than picking silently.
+            logger.warning('%d windows match the pinned selection %r — using the first (HWND %s). Give the clients different window titles to run them side by side.',
+                           len(matches), selection.title, matches[0])
+        self.enumerate_windows()
+        return matches[0]
 
     
     def _auto_detect_child(self):
@@ -292,10 +303,43 @@ Outer window size in pixels (``GetWindowRect``), same basis as :meth:`screenshot
 
 
     
+    def is_minimized(self):
+        '''True when the game window is minimized (its own window or a parent).
+
+        Windows parks a minimized window at (-32000, -32000); Google Play Games nests the
+        game surface in a wrapper, so the surface itself can report not-iconic while its
+        parent is. Measured live: minimized captures come back pure black while clicks
+        still reach the game, which is the worst possible combination — the bot cannot
+        see what it is clicking.
+        '''
+        try:
+            hwnd = self.hwnd
+            while hwnd:
+                if self.user32.IsIconic(hwnd):
+                    return True
+                rect = wintypes.RECT()
+                self.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                if rect.left <= _MINIMIZED_COORD and rect.top <= _MINIMIZED_COORD:
+                    return True
+                hwnd = self.user32.GetParent(hwnd)
+            return False
+        except Exception:
+            return False
+
     def screenshot(self):
-        '''Captures a screenshot of the window.'''
+        '''Captures a screenshot of the window.
+
+        Returns None when the window is minimized or renders nothing: a black frame
+        matches no template and reads no text, so acting on one means clicking blind.
+        '''
         if not self.hwnd and self.find_window():
             return None
+        if self.is_minimized():
+            if not WindowService._minimized_logged:
+                WindowService._minimized_logged = True
+                logger.warning('Game window is minimized — capture is blank while it stays that way. Restore the Clash of Clans window (it may sit behind other windows, just not minimized). Logged once per run.')
+            return None
+        WindowService._minimized_logged = False
         
         try:
             rect = wintypes.RECT()

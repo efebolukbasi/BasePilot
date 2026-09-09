@@ -38,6 +38,9 @@ try:
         ASPECT_16_10: (49, 80, 24),
         ASPECT_16_9: (43, 80, 18) }
     _NUMBERS_REF_LINE_HEIGHT_PX = 30
+    # Blank between two characters, in median digit widths, that means they belong to
+    # different numbers rather than to the same one.
+    _NUMBER_RUN_GAP_WIDTHS = 2.0
     HUD_TOP_RIGHT_NUMBERS_ROI_UPSCALE = 3
     
     @dataclass(frozen = True)
@@ -1496,6 +1499,30 @@ differ by at most ``y_tolerance`` px.
 
         
         @staticmethod
+        def split_cluster_on_gaps(cluster, gap_px):
+            '''Split one line of character boxes wherever a horizontal gap exceeds
+            ``gap_px``. Returns a list of runs, left to right.
+
+            A line of OCR'd characters is not necessarily one number. Anything bright and
+            narrow sharing the line — the "+385,306" loot floater that drifts beside the
+            HUD after a raid, a lamp post behind a bar, an icon edge — is read as a digit
+            and, merged into the row, silently multiplies the reading by ten or more (live:
+            elixir 16,256,996 read as 116,256,996 and acted on). Digits inside a number sit
+            1-3 px apart at a 1299-wide capture and 6-8 px across a thousands separator;
+            anything that is not part of the number is much further away than that.
+            '''
+            parts = sorted(cluster or [], key = (lambda b: b.left))
+            if len(parts) < 2:
+                return [ list(parts) ] if parts else []
+            runs = [[parts[0]]]
+            for box in parts[1:]:
+                prev = runs[-1][-1]
+                if box.left - (prev.left + prev.width) > float(gap_px):
+                    runs.append([])
+                runs[-1].append(box)
+            return runs
+
+        @staticmethod
         def merge_numeric_cluster(cluster, *, join_separator = ' '):
             '''
 Sort left-to-right and union bounding boxes into one :class:`GroupedNumber`.
@@ -1561,7 +1588,11 @@ with one inner list per Y-cluster (characters left-to-right) after clustering, f
                 cfg = tesseract_config
             _ = min_confidence
             chars = VisionService.find_chars_ocr(screen_img, region = region, preprocess = preprocess, white_text = white_text, tesseract_config = cfg, cc_filter_blobs = cc_filter_blobs, cc_min_area = cc_min_area, cc_max_area = cc_max_area, save_preprocess_png = save_preprocess_png, roi_upscale = roi_upscale, ocr_debug_box_path = ocr_debug_box_path, ocr_debug_boxes_png_path = ocr_debug_boxes_png_path, psm10_glyph_confidence = psm10_glyph_confidence)
-            digit_chars = [ c for c in chars if c.text.isdigit() or c.text == 'l' ]  # [recovered: decompiler dropped the isdigit() disjunct; 'l' is kept because merge_numeric_cluster maps it to '1']
+            # find_chars_ocr returns None when Tesseract itself is unavailable, and every
+            # caller here is written for "no numbers found" rather than an exception (live:
+            # the wall gate died with TypeError in a process that had not put Tesseract on
+            # the path).
+            digit_chars = [ c for c in chars or () if c.text.isdigit() or c.text == 'l' ]  # [recovered: decompiler dropped the isdigit() disjunct; 'l' is kept because merge_numeric_cluster maps it to '1']
             if not digit_chars:
                 return []
             if y_tolerance_px is None:
@@ -1570,6 +1601,16 @@ with one inner list per Y-cluster (characters left-to-right) after clustering, f
             else:
                 y_tol = float(y_tolerance_px)
             clusters = VisionService.cluster_ocr_boxes_by_y(digit_chars, y_tol)
+            # One line can hold more than one number. Split each line where the spacing
+            # stops looking like the inside of a number: digits sit 1-3 px apart at a
+            # 1299-wide capture and 6-8 px across a thousands separator, so a couple of
+            # digit widths of blank is something else entirely.
+            med_w = float(np.median([ c.width for c in digit_chars ])) or 1.0
+            gap_px = max(3.0, med_w * _NUMBER_RUN_GAP_WIDTHS)
+            runs = []
+            for cl in clusters:
+                runs.extend(VisionService.split_cluster_on_gaps(cl, gap_px))
+            clusters = runs
             if not hud_debug_char_clusters_out is None:
                 hud_debug_char_clusters_out.clear()
                 for cl in clusters:
@@ -1625,8 +1666,9 @@ elixir left‑to‑right in the OCR ROI — take clusters sorted by horizontal c
             '''
 From :meth:`extract_top_right_hud_numbers` clusters, derive ``(gold, elixir, dark_elixir)``:
 the home HUD stacks the three resource bars vertically (gold, elixir, dark top to bottom),
-so the three **topmost** decoded numbers are taken in vertical order. Returns ``None`` if
-fewer than three numeric clusters are available.
+so the three **topmost** rows are taken in vertical order — one number per row, the
+rightmost when a row decodes more than one. Returns ``None`` if fewer than three rows
+are available.
 '''
             # The HUD numbers are right-aligned, so a horizontal sort orders them by digit
             # count (7-digit elixir would land before 6-digit gold) — vertical order is the
@@ -1637,11 +1679,25 @@ fewer than three numeric clusters are available.
                 if v is None:
                     continue
                 cy = float(g.top) + float(g.height) * 0.5
-                scored.append((cy, v))
+                scored.append((cy, float(g.left) + float(g.width), v, float(g.height)))
             scored.sort(key = (lambda t: t[0]))
-            if len(scored) < 3:
+            if not scored:
                 return None
-            return (scored[0][1], scored[1][1], scored[2][1])
+            # One row, one number. Each bar's number is right-aligned against its resource
+            # icon, so when a row yields more than one number the rightmost is the resource
+            # and whatever else was on the line — a loot floater fading after a raid, a
+            # piece of scenery behind the bar — is to the left of it and is not.
+            row_tol = max(4.0, float(np.median([ t[3] for t in scored ])) * 0.6)
+            rows = []
+            for entry in scored:
+                if rows and abs(entry[0] - rows[-1][0]) <= row_tol:
+                    if entry[1] > rows[-1][1]:
+                        rows[-1] = entry
+                    continue
+                rows.append(entry)
+            if len(rows) < 3:
+                return None
+            return (rows[0][2], rows[1][2], rows[2][2])
 
         
         @staticmethod

@@ -18,6 +18,17 @@ if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS') and not os.environ
     if os.path.isfile(_bundled_tess):
         os.environ['TESSERACT_CMD'] = _bundled_tess
 
+# `--profile NAME` before anything reads the data directory: it decides where settings,
+# the game-window pin, captured templates, the log and debug frames live, so two copies
+# of BasePilot can drive two clients at once without overwriting each other. Read from
+# argv here rather than in the GUI parser because the very first import below already
+# resolves the log path.
+if '--profile' in sys.argv:
+    try:
+        os.environ['BASEPILOT_PROFILE'] = sys.argv[sys.argv.index('--profile') + 1]
+    except IndexError:
+        pass
+
 from app.ui.qt.app import run_gui
 from app.utils.logger import setup_logger
 from app.utils.tesseract_env import configure_tesseract

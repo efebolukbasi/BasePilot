@@ -60,6 +60,7 @@ _STALE_STEPS_AT_LIST_END = 2  # consecutive scrolls adding no new rows = bottom 
 _RESET_TO_TOP_WHEEL_CLICKS = _MAX_SCROLL_STEPS * _WHEEL_CLICKS + 4
 
 _EXEC_ROW_STABLE_TOL = 30  # ref px: max y drift between consecutive frames before a row click is trusted
+_EXEC_CONFIRM_MISSES = 4  # in-place re-parses allowed before a sighted row is scrolled past (parses flicker)
 _EXEC_LABEL_FUZZY_MIN = 0.85  # exec-pass row label vs the scan-pass pick (compacted, difflib)
 _EXEC_UPGRADE_WORD_POLLS = 8  # post-click polls for an "Upgrade" word (camera pans >1s before UI renders)
 _EXEC_MAX_UPGRADE_CLICKS = 2  # bottom-bar Upgrade → confirm-dialog Upgrade; never a third blind click
@@ -394,6 +395,62 @@ class UpgradeAdvisor:
                     return (row.center, section)
         return (None, section)
 
+    def _descend_for_pick(self, pick):
+        '''Walk the popup from its current position looking for ``pick``. Returns the
+        row's click point, or None.
+
+        Two consecutive frames must agree on the row's y before it is trusted — the list
+        keeps easing after a wheel nudge and a click on stale coordinates lands on
+        whatever slid underneath. The re-parse allowance matters: a sighting that flickers
+        out for a couple of frames is otherwise scrolled past, and the descent only
+        travels downwards, so the row is then gone for the rest of the pass.
+        '''
+        candidate = None
+        confirm_misses = 0
+        section = ''
+        scrolls = 0
+        for _ in range(_MAX_SCROLL_STEPS * 3):
+            if self.stop_event.is_set():
+                return None
+            (found, section) = self._find_pick_row_once(
+                pick, section, near_y = candidate[1] if candidate else None)
+            if found:
+                if candidate and abs(found[1] - candidate[1]) <= self.config.scale_scalar(_EXEC_ROW_STABLE_TOL):
+                    return found
+                candidate = found
+                confirm_misses = 0
+                if self.stop_event.wait(0.25):
+                    return None
+                continue
+            if candidate is not None and confirm_misses < _EXEC_CONFIRM_MISSES:
+                # One flickered parse must not lose a live candidate: the list is
+                # static here (no scroll since the sighting) — re-parse in place
+                # instead of scrolling the row away.
+                confirm_misses += 1
+                if self.stop_event.wait(0.3):
+                    return None
+                continue
+            if candidate is not None:
+                # The parse lands about one frame in six on a small capture (measured
+                # live: sighted at parse 6, then five straight misses at the same
+                # position), so demanding a second agreeing sighting can never be met and
+                # the row gets scrolled past forever. Nothing has scrolled since the
+                # sighting, so those coordinates are still current — the agreement rule
+                # guards against post-scroll easing, not against a list sitting still.
+                # A wrong click here is still caught downstream by the Upgrade-word hunt,
+                # the red-cost veto and the builder-chip verification.
+                logger.info('Upgrade exec: row %r sighted at %s but re-parses keep missing — trusting the sighting (nothing scrolled since)', pick.label, candidate)
+                return candidate
+            candidate = None
+            confirm_misses = 0
+            scrolls += 1
+            if scrolls >= _MAX_SCROLL_STEPS:
+                return None
+            self.input.scroll(*self._scroll_point(), _WHEEL_CLICKS)
+            if self.stop_event.wait(0.45):
+                return None
+        return None
+
     def _execute(self, pick, scan):
         '''Click the picked row and walk the Upgrade chain. True only when the builder
         chip verifies the start (free count dropped below the scan-time reading).'''
@@ -402,43 +459,18 @@ class UpgradeAdvisor:
             return False
         if not self._open_builder_popup():
             return False
-        # Locate the row: poll OCR at each scroll position; require two consecutive
-        # frames to agree on its y before trusting the click (wall-flow discipline).
-        row_pt = None
-        candidate = None
-        confirm_misses = 0
-        section = ''
-        scrolls = 0
-        for _ in range(_MAX_SCROLL_STEPS * 3):
-            if self.stop_event.is_set():
+        row_pt = self._descend_for_pick(pick)
+        if row_pt is None:
+            # A flickery descent is not proof the row is gone. Parses drop out at random
+            # positions (live: 2 of 8 positions parsed zero rows on a real client), and a
+            # sighting lost to consecutive bad frames gets scrolled past for good, since
+            # the descent only travels downwards. Walk it once more from the top before
+            # writing the row off for half an hour.
+            logger.info('Upgrade exec: row %r not found on the first descent — resetting to the top and retrying', pick.label)
+            self.input.scroll(*self._scroll_point(), _RESET_TO_TOP_WHEEL_CLICKS, upward = True)
+            if self.stop_event.wait(0.6):
                 return False
-            (found, section) = self._find_pick_row_once(
-                pick, section, near_y = candidate[1] if candidate else None)
-            if found:
-                if candidate and abs(found[1] - candidate[1]) <= self.config.scale_scalar(_EXEC_ROW_STABLE_TOL):
-                    row_pt = found
-                    break
-                candidate = found
-                confirm_misses = 0
-                if self.stop_event.wait(0.25):
-                    return False
-                continue
-            if candidate is not None and confirm_misses < 2:
-                # One flickered parse must not lose a live candidate: the list is
-                # static here (no scroll since the sighting) — re-parse in place
-                # instead of scrolling the row away.
-                confirm_misses += 1
-                if self.stop_event.wait(0.3):
-                    return False
-                continue
-            candidate = None
-            confirm_misses = 0
-            scrolls += 1
-            if scrolls >= _MAX_SCROLL_STEPS:
-                break
-            self.input.scroll(*self._scroll_point(), _WHEEL_CLICKS)
-            if self.stop_event.wait(0.45):
-                return False
+            row_pt = self._descend_for_pick(pick)
         if not row_pt:
             # The two-scan re-find is the phantom-row filter: OCR junk (village pixels
             # bleeding through the translucent popup) parses as cheap fake rows, and
@@ -455,15 +487,18 @@ class UpgradeAdvisor:
         # Storage row above it). Let the ease finish, then click FRESH coordinates.
         if self.stop_event.wait(0.4):
             return False
-        (fresh, section) = self._find_pick_row_once(pick, section, near_y = row_pt[1])
-        if fresh is None:
-            logger.info('Upgrade exec: row %r lost right before the click — closing without clicking', pick.label)
-            self._close_popup()
-            return False
-        row_pt = fresh
+        (fresh, _section) = self._find_pick_row_once(pick, '', near_y = row_pt[1])
+        if fresh is not None:
+            row_pt = fresh
+        else:
+            # A missed re-parse is not the row moving — at this capture size most parses
+            # miss. The descent has not scrolled since it sighted the row, so its point
+            # is still the best evidence available; giving up here is what benched every
+            # candidate in turn until nothing was left to start.
+            logger.info('Upgrade exec: re-parse missed right before the click — using the sighted point %s', row_pt)
         logger.info('Upgrade exec: clicking row %r at %s', pick.label, row_pt)
         self.input.click(pause = 0.6, *row_pt)
-        started = self._walk_upgrade_chain(pick)
+        started = self._walk_upgrade_chain(pick, free_before = free_before)
         if not started:
             self._exec_cooldowns[_compact(pick.label)] = time.monotonic()
             self._escape_ui('upgrade chain did not complete')
@@ -628,7 +663,7 @@ class UpgradeAdvisor:
             return None
         return (cx, cy)
 
-    def _walk_upgrade_chain(self, pick):
+    def _walk_upgrade_chain(self, pick, free_before = None):
         '''After the row click: hunt and click "Upgrade" up to twice (bottom bar →
         confirm dialog). True when at least one Upgrade was clicked and the chain went
         quiet (no further Upgrade word — the confirm dialog closed itself).'''
@@ -686,6 +721,17 @@ class UpgradeAdvisor:
                     return False
                 continue
             if clicks >= _EXEC_MAX_UPGRADE_CLICKS:
+                # A visible "Upgrade" word is not proof the upgrade did not start: the
+                # building's own bar keeps one on screen afterwards. The builder chip is
+                # the ground truth this module already trusts, so ask it before writing
+                # the attempt off — measured live: the chain "aborted" here on a Bomb
+                # that had in fact started, and the next scan read 1/5 builders free
+                # instead of 2/5, with the row then benched for half an hour for nothing.
+                frame_now = self._frame()
+                chip = parse_builder_chip(frame_now) if frame_now is not None else None
+                if chip is not None and free_before is not None and chip[0] < free_before:
+                    logger.info('Upgrade exec: Upgrade word still visible, but builders dropped %d -> %d — the upgrade started', free_before, chip[0])
+                    return True
                 logger.warning('Upgrade exec: Upgrade word still visible after %d clicks — aborting', clicks)
                 _dump_debug_frame(frame, 'upgexec_fail')
                 return False

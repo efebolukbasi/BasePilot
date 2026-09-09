@@ -6,6 +6,8 @@ from typing import Tuple
 from app.services.window import WindowService, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, MK_LBUTTON, WM_MOUSEWHEEL, WHEEL_DELTA
 from app.utils.logger import setup_logger
 logger = setup_logger('InputService')
+_CLICK_JITTER_REF_PX = 15  # the spread the click scatter was authored for, in reference pixels
+_REFERENCE_WIDTH = 2560  # both aspect baselines are 2560 wide
 
 class InputService:
     '''Handles mouse and keyboard injection.'''
@@ -16,6 +18,19 @@ class InputService:
         self.user32 = ctypes.windll.user32
 
     
+    def _click_jitter(self):
+        '''Half-width of the click scatter, in capture pixels.
+
+        The +/-15 px it was written with is 15 px *at the authoring resolution*. Left
+        unscaled it doubles in relative terms on a 1299-wide window, where a builder-menu
+        row is only ~30 px tall — so the scatter, meant to keep clicks off one exact
+        pixel, was landing them on the row above or below.
+        '''
+        sz = self.window_service.get_outer_pixel_size()
+        if not sz or not sz[0] or sz[0] <= 1:
+            return _CLICK_JITTER_REF_PX
+        return max(3, int(round(_CLICK_JITTER_REF_PX * sz[0] / float(_REFERENCE_WIDTH))))
+
     def _clamp_to_capture(self, x, y):
         '''
 Clamp client-style coordinates into the current captured window rectangle
@@ -65,8 +80,9 @@ Clamp client-style coordinates into the current captured window rectangle
     def click(self, x, y, pause = 1, rand = True):
         '''Performs a click with optional randomization and delay.'''
         if rand:
-            x += random.randint(-15, 15)
-            y += random.randint(-15, 15)
+            spread = self._click_jitter()
+            x += random.randint(-spread, spread)
+            y += random.randint(-spread, spread)
         self._inject_click(x, y)
         sleep_time = random.uniform(pause - pause * 0.2, pause + pause * 0.2)
         time.sleep(max(0.1, sleep_time))
@@ -84,8 +100,9 @@ Clamp client-style coordinates into the current captured window rectangle
     def click_at(self, x, y, rand = False):
         '''Single mouse down/up at (x, y) with no delay (for chained clicks with custom timing).'''
         if rand:
-            x += random.randint(-15, 15)
-            y += random.randint(-15, 15)
+            spread = self._click_jitter()
+            x += random.randint(-spread, spread)
+            y += random.randint(-spread, spread)
         self._inject_click(int(x), int(y))
 
     

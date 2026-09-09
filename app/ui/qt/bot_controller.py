@@ -3,9 +3,35 @@ from __future__ import annotations
 import threading
 from PySide6.QtCore import QObject, Signal
 from app.core.bot import Bot
+from app.core.clan import ClanOptions
+from app.core.loot_filter import LootFilter
 from app.utils.logger import setup_logger
 from app.utils.profile_settings_store import load_profile_settings
 logger = setup_logger('BotController')
+
+
+def _clan_options(profile, *, donate, request):
+    '''Run-page toggles + profile preferences -> the bot's ClanOptions.'''
+    point = profile.clan_chat_point
+    return ClanOptions(
+        donate = bool(donate),
+        request = bool(request),
+        dry_run = bool(profile.clan_dry_run),
+        chat_point = (float(point[0]), float(point[1])) if point else None,
+        chat_point_aspect = profile.clan_chat_point_aspect,
+        donate_troop = profile.clan_donate_troop,
+        donate_count = int(profile.clan_donate_count),
+        min_elixir = int(profile.clan_min_elixir_k) * 1000,
+        donate_interval_s = int(profile.clan_donate_interval_m) * 60,
+        request_interval_s = int(profile.clan_request_interval_m) * 60)
+
+def _loot_filter(profile):
+    '''Profile preferences -> the farm loop's LootFilter (settings are in thousands).'''
+    return LootFilter(
+        min_gold = int(profile.attack_min_gold_k) * 1000,
+        min_elixir = int(profile.attack_min_elixir_k) * 1000,
+        max_skips = int(profile.attack_max_skips))
+
 
 class BotController(QObject):
     statusChanged = Signal(str, bool)
@@ -29,7 +55,7 @@ class BotController(QObject):
         return self._bot_thread is not None and self._bot_thread.is_alive()
 
 
-    def start(self, *, method, minutes, star_bonus, ranked_fill, upgrade_walls, multi_run_players, builder_base = False, loot_prioritise = 'both', auto_upgrade = 'off'):
+    def start(self, *, method, minutes, star_bonus, ranked_fill, upgrade_walls, multi_run_players, builder_base = False, loot_prioritise = 'both', auto_upgrade = 'off', auto_donate = False, auto_request = False):
         '''``minutes <= 0`` = unlimited ("run until maxed") — single Home Village runs only.'''
         if self.is_running():
             return None
@@ -49,7 +75,7 @@ class BotController(QObject):
 
             try:
                 profile = load_profile_settings()
-                self._bot.start(method, minutes, star_bonus = star_bonus, status_callback = on_status, loot_callback = on_loot, state_callback = on_state, multi_run_players = multi_run_players, ranked_fill = ranked_fill, upgrade_walls = upgrade_walls, earthquake_method = profile.earthquake_method, builder_base = builder_base, loot_prioritise = loot_prioritise, wall_upgrade_threshold = profile.wall_upgrade_threshold_m * 1000000, auto_upgrade = auto_upgrade, reserve_builders = profile.reserve_builders, upgrade_order = profile.upgrade_order)
+                self._bot.start(method, minutes, star_bonus = star_bonus, status_callback = on_status, loot_callback = on_loot, state_callback = on_state, multi_run_players = multi_run_players, ranked_fill = ranked_fill, upgrade_walls = upgrade_walls, earthquake_method = profile.earthquake_method, builder_base = builder_base, loot_prioritise = loot_prioritise, wall_upgrade_threshold = profile.wall_upgrade_threshold_m * 1000000, auto_upgrade = auto_upgrade, reserve_builders = profile.reserve_builders, upgrade_order = profile.upgrade_order, clan_options = _clan_options(profile, donate = auto_donate, request = auto_request), loot_filter = _loot_filter(profile))
             except InterruptedError:
                 logger.info('Bot thread stopped by user')
             except Exception as exc:

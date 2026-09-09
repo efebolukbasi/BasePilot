@@ -26,11 +26,19 @@ def _legacy_player_list_paths():
 def get_player_list_path():
     dest = get_user_app_data_dir() / 'player_list.json'
     ensure_dir(dest.parent)
-    while not dest.is_file():
-        for leg in _legacy_player_list_paths():
+    if dest.is_file():
+        return dest
+    # [recovered: the decompiler dropped the existence check and copied every legacy
+    # path unconditionally, so a fresh install — which has no player_list.json next to
+    # the exe or repo root — raised FileNotFoundError from every Players page action]
+    for leg in _legacy_player_list_paths():
+        if not leg.is_file():
+            continue
+        try:
             shutil.copy2(leg, dest)
-            _legacy_player_list_paths()
-            return dest
+        except OSError:
+            continue
+        return dest
     return dest
 
 
@@ -48,13 +56,13 @@ def load_players():
             if not isinstance(item, dict):
                 continue
             name = item.get('name')
-            if not name or isinstance(name, str):
+            if not name or not isinstance(name, str):  # [recovered: dropped `not` — every valid (string) name was skipped, so the list always loaded empty]
                 continue
             enabled = bool(item.get('enabled', True))
             out.append(PlayerEntry(name = name.strip(), enabled = enabled))
         return out
     except (json.JSONDecodeError, OSError):
-        return None
+        return []  # [recovered: returned None, which every caller iterates -> TypeError on a corrupt file]
 
 
 
